@@ -1,10 +1,9 @@
 import os
 
+
 class FileNavigator:
-    """Returns all files in a directory if dir exists or False if dir does NOT exist"""
     def __init__(self, filepath):
         self.filepath = filepath
-        self.file_exists = os.path.exists(filepath)
 
     def dirList(self):
         if os.path.isfile(self.filepath):
@@ -17,6 +16,6 @@ class FileNavigator:
             return dir_list
 
 if __name__=="__main__":
-    File_navigator= FileNavigator('./data')
-    print(File_navigator.dirList())
+    file_navigator= FileNavigator('./data')
+    print(file_navigator.dirList())
 

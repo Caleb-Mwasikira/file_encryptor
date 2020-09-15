@@ -1,125 +1,179 @@
+import os
+import re
+import argparse
+import getpass
+from base64 import b64encode, b64decode
+
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.fernet import Fernet
-import os
-import re
-import base64
-import argparse
-import getpass
+from cryptography.fernet import Fernet, InvalidToken
 
 from file_navigator import FileNavigator
 
-class Encryptor:
-    """Encrypts And Decrypts Files Based On the Users Input Password"""
-    def __init__(self, filepath, password):
-        """Generates Symmetric Key That Will Be Used In Encryption And Decryption"""
-        self.password = password
 
-        # Use self.salt = os.urandom(10) for production.
-        self.salt = b'\x1c\x16\x83|O\xe7^\x7f\xd3\x94G\x00"\xfb\xbdF'
-        self.kdf = PBKDF2HMAC(
+class Encryptor:
+    def __init__(self, process, password):
+        self.process = process
+        self.password = password.encode("utf-8")
+
+        self.key, self.salt = self.keyDerivationFunc(
+            salt=b'\x1c\x16\x83|O\xe7^\x7f\xd3\x94G\x00"\xfb\xbdF', # substitute harcoded salt during production
+            password=self.password
+        )
+        self.fernet_cipher = Fernet(self.key)
+
+
+    def keyDerivationFunc(self, password, salt=None):
+        if salt is None:
+            BYTES = 16
+            salt = os.urandom(BYTES)
+            
+
+        kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
-            salt=self.salt,
+            salt=salt,
             iterations=100000,
             backend=default_backend()
         )
 
-        self.key = base64.b64encode(self.kdf.derive(self.password.encode("utf-8")))
-        self.file = filepath
+        key = b64encode(kdf.derive(self.password))
+        return [key, salt]
 
-    def encryptFile(self):
-        """Encrypts files using a password"""
+    def encryptFile(self, file):
+        """Encrypts files using a generated cipher"""
 
-        print(f"[*] Encrypting Data From {self.file}")
-        with open(self.file, 'rb') as f:
+        print(f"[*] Encrypting Data From [ {file} ]")
+        with open(file, 'rb') as f:
             data = f.read()
 
-        f = Fernet(self.key)
-        encrypted_data = f.encrypt(data)
+        plain_text = self.fernet_cipher.encrypt(data)
 
-        # Adding a naming convention (encrypted) to mark file as already encrypted
-        old_file_dirname = os.path.dirname(self.file)
-        new_file_basename = '(encrypted)' + os.path.basename(self.file)
-        new_filename = os.path.join(old_file_dirname, new_file_basename)
-
+        # Marking the file as (encrypted)
+        new_filename = self.renameFile(file)
+        
         with open(new_filename, 'wb') as f:
-            f.write(encrypted_data)
+            f.write(plain_text)
 
-        os.remove(self.file)
-        print(f'[+] File Encrypted Successfully')
+        print(f"[+] File Encrypted Successfully\n")
 
-    def decryptFile(self):
-        """Decrypts (encrypted) files using a password"""
-        print(f"[*] Decrypting Data From {self.file}")
-        with open(self.file, 'rb') as f:
+
+    def decryptFile(self, file):
+        """Decrypts files using a generated cipher"""
+
+        print(f"[*] Decrypting Data From [ {file} ]")
+        with open(file, 'rb') as f:
             data = f.read()
 
-        f = Fernet(self.key)
-        plaintext = f.decrypt(data)
+        try:
+            plain_text = self.fernet_cipher.decrypt(data)
 
-        # Removing the naming convention (encrypted) that was placed when file was being encrypted
-        old_file_dirname = os.path.dirname(self.file)
-        old_file_basename = os.path.basename(self.file)
+            # Marking the file as decrypted
+            new_filename = self.renameFile(file)
+            with open(new_filename, 'wb') as f:
+                f.write(plain_text)
 
-        new_file_basename = old_file_basename[11:]
+            print(f"[+] File Decrypted Successfully\n")
 
-        new_file_name = os.path.join(old_file_dirname, new_file_basename)
-        with open(new_file_name, 'wb') as f2:
-            f2.write(plaintext)
+        except InvalidToken:
+            print(f"[!] Error: Using invalid key to decrypt file.\n"
+                    "    Please check your password and try again")
 
-        os.remove(self.file)
-        print(f'[+] File Decrypted Successfully')
+    def renameFile(self, file):
+        old_file_dirname = os.path.dirname(file)
+        old_file_basename = os.path.basename(file)
+
+        if self.process in encrypt:
+            new_file_basename = '(encrypted)' + os.path.basename(file)
+        else:
+            new_file_basename = old_file_basename[11:]
+        
+        new_filename = os.path.join(old_file_dirname, new_file_basename)
+        os.remove(file)
+        return new_filename
+    
+
 
 def getProgramArgs():
-    """Gets system arguments set when starting the program"""
-    argument_parser = argparse.ArgumentParser()
-    argument_parser.add_argument('-p', '--process', help=f"Process to be executed by {__file__}:\n"
+    """Gets program arguments set when starting the program"""
+
+    arg_parser = argparse.ArgumentParser()
+    arg_parser.add_argument('-p', '--process', help=f"Process to be executed by [ {__file__} ]:\n"
                                                          f"{encrypt} or {decrypt}")
-    argument_parser.add_argument('-f', '--filepath', help="Path of the file/folder to be encrypted")
-    args = vars(argument_parser.parse_args())
+    arg_parser.add_argument('-f', '--filepath', help="Path of the file/folder to be encrypted")
+    args = vars(arg_parser.parse_args())
     return [args['process'], args['filepath']]
 
-def Main(process, file, password):
-    encryptor = Encryptor(filepath=file, password=password)
 
-    pattern = re.compile(r'[(]encrypted[)]\w+\.\w+')
-    file_is_encrypted = re.match(pattern, os.path.basename(file)) or False
+def fileIsEncrypted(file):
+        """Checks whether file is marked as encrypted or not"""
 
-    if process in encrypt:
-        if file_is_encrypted:
-            print("[!] Error: Trying to encrypt an encrypted file!")
+        pattern = re.compile(r'[(]encrypted[)]\w+\.\w+')
+        file_is_encrypted = re.match(pattern, os.path.basename(file)) or False
+        return file_is_encrypted
+
+def validateUserInput(process, filepath, password):
+    confirm_password = ""
+    file_exists = False
+
+    while process not in accepted_user_entries:
+        print(f"\n[-] No process defined to be executed by [ {__file__} ]:\n"
+              f"    Available options: {encrypt} or {decrypt}")
+        process= input(">> ")
+
+    while filepath is None or not file_exists:
+        filepath = input(f"Please enter the path of the file/files you wish to process >> ")
+        file_exists = os.path.exists(filepath)
+
+        if not file_exists:
+            print(f"[-] FileNotFound: [ {filepath} ]\n")
+
+    while password is None or len(password) < 1 or password != confirm_password:
+        password = getpass.getpass(prompt="Please enter your password >> ")
+        confirm_password = getpass.getpass(prompt="Confirm password >> ")
+
+        if password != confirm_password:
+            print(f"[-] Error: Password and password confirm DO NOT MATCH")    
+
+    return [process, filepath, password]
+
+
+def Main():
+    global encrypt, decrypt, accepted_user_entries
+
+    process, filepath = getProgramArgs()
+    password = os.environ.get("PASSWORD")
+
+    process, filepath, password = validateUserInput(
+        process=process, filepath=filepath, password=password
+    )
+
+    file_encryptor = Encryptor(process=process, password=password)
+    file_navigator = FileNavigator(filepath)
+    files = file_navigator.dirList()
+
+    if len(files) == 0:
+        print(f"[?] No files found in [ {filepath} ] to encrypt/decrypt.\n"
+                "    Please check if filepath is correct and try again\n"
+        )
+
+    for file in files:
+        if process in encrypt:
+            if fileIsEncrypted(file):
+                print(f"[!] Cannot encrypt [ {file} ]. File already marked as encrypted\n")
+            else:
+                file_encryptor.encryptFile(file)
         else:
-            encryptor.encryptFile()
-    else:
-        if file_is_encrypted:
-            encryptor.decryptFile()
-        else:
-            print("[!] Error: Trying to decrypt a decrypted file!")
+            if fileIsEncrypted(file):
+                file_encryptor.decryptFile(file)
+            else:
+                print(f"[!] Cannot decrypt [ {file} ]. File already marked as decrypted.\n")
+        
 
 if __name__ == "__main__":
     encrypt = ['encrypt', 'e', 'E']
     decrypt = ['decrypt', 'd', 'D']
     accepted_user_entries = encrypt + decrypt
 
-    process, filepath = getProgramArgs()
-    password = os.environ.get("PASSWORD")
-
-    if process not in accepted_user_entries:
-        print(f"[-] Error: Invalid process to be executed by {__file__}:\n"
-              f"    Available options: -p {encrypt} or -p {decrypt}")
-        exit()
-
-    while password is None or len(password) < 1:
-        password = getpass.getpass(prompt="Please Enter your password: ")
-
-    fileNavigator = FileNavigator(filepath)
-    dir_list = fileNavigator.dirList()
-
-    if len(dir_list) < 1:
-        print(f"[!] Error: {filepath} does not exist")
-    else:
-        for file in dir_list:
-            Main(process=process, file=file, password=password)
-
+    Main()
