@@ -3,7 +3,7 @@ import inquirer
 from pprint import pprint
 from inquirer import errors
 
-from packages import file_navigator
+from custom_packages import file_navigator
 
 """
 cli.py short for (command line interface).py is responsible for 
